@@ -1,0 +1,61 @@
+name: Render night screen
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"   # every 30 min, off the busy top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write            # monthly keepalive commit
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # The day's last good webcam frame lives in the Actions cache, not on the public site.
+      - uses: actions/cache/restore@v6
+        with:
+          path: state
+          key: last-good-${{ github.run_id }}
+          restore-keys: last-good-
+      - name: Render
+        run: |
+          python render.py state
+          mkdir -p site
+          cp state/night.png state/night-kindle.png state/index.html site/
+      - uses: actions/cache/save@v6
+        with:
+          path: state
+          key: last-good-${{ github.run_id }}
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+      # GitHub disables scheduled workflows after 60 days without repository activity.
+      - name: Keep the schedule alive
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 2592000 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep scheduled render alive"
+            git push
+          fi
